@@ -46,6 +46,10 @@
         border-radius:16px;padding:16px 18px}
   .card .lbl{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.5px}
   .card .val{font-size:24px;font-weight:700;margin-top:6px}
+  .cardtop{display:flex;justify-content:space-between;align-items:flex-start;gap:6px}
+  .cardarrow{font-size:22px;font-weight:800;line-height:.8;flex-shrink:0}
+  .cardarrow.up{color:var(--green)}
+  .cardarrow.down{color:var(--red)}
   .pos{color:var(--green)} .neg{color:var(--red)}
   .panel{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
          border-radius:18px;padding:18px 18px 8px;margin-bottom:24px}
@@ -285,16 +289,20 @@ async function load(){
 function renderAll(){
   const s=DATA.summary, series=DATA.series;
 
-  // karty
+  // karty — šípka = zmena oproti predošlému dňu (zelená hore / červená dole)
+  const cN=series.length, cLast=cN?series[cN-1]:null, cPrev=cN>1?series[cN-2]:null;
+  const dir=(a,b)=> (a==null||b==null)?0:(a>b?1:(a<b?-1:0));
   const cards=[
-    {lbl:"Denný čistý tok", v:fmtUSD(s.dailyNetInflow), c:cls(s.dailyNetInflow)},
-    {lbl:"Kumulatívny tok", v:fmtUSD(s.cumNetInflow), c:"pos"},
-    {lbl:"Net assets (AUM)", v:fmtUSD(s.totalNetAssets), c:""},
-    {lbl:"Denný obrat", v:fmtUSD(s.dailyTotalValueTraded), c:""},
-    {lbl:"BTC v držbe", v:(s.totalTokenHoldings!=null? Math.round(s.totalTokenHoldings).toLocaleString("en-US")+" ₿":"–"), c:""},
+    {lbl:"Denný čistý tok", v:fmtUSD(s.dailyNetInflow), c:cls(s.dailyNetInflow), d: cLast&&cPrev?dir(cLast.totalNetInflow,cPrev.totalNetInflow):0},
+    {lbl:"Kumulatívny tok", v:fmtUSD(s.cumNetInflow), c:"pos", d: cLast&&cPrev?dir(cLast.cumNetInflow,cPrev.cumNetInflow):0},
+    {lbl:"Net assets (AUM)", v:fmtUSD(s.totalNetAssets), c:"", d: cLast&&cPrev?dir(cLast.totalNetAssets,cPrev.totalNetAssets):0},
+    {lbl:"Denný obrat", v:fmtUSD(s.dailyTotalValueTraded), c:"", d: cLast&&cPrev?dir(cLast.totalValueTraded,cPrev.totalValueTraded):0},
+    {lbl:"BTC v držbe", v:(s.totalTokenHoldings!=null? Math.round(s.totalTokenHoldings).toLocaleString("en-US")+" ₿":"–"), c:"", d:(s.dailyNetInflow||0)>0?1:((s.dailyNetInflow||0)<0?-1:0)},
   ];
-  document.getElementById("cards").innerHTML = cards.map(c=>
-    `<div class="card"><div class="lbl">${c.lbl}</div><div class="val ${c.c}">${c.v}</div></div>`).join("");
+  document.getElementById("cards").innerHTML = cards.map(c=>{
+    const a = c.d>0? '<span class="cardarrow up">↑</span>' : c.d<0? '<span class="cardarrow down">↓</span>' : '';
+    return `<div class="card"><div class="cardtop"><span class="lbl">${c.lbl}</span>${a}</div><div class="val ${c.c}">${c.v}</div></div>`;
+  }).join("");
 
   // prehľadová tabuľka (3 / 7 / 30 dní)
   const last = series[series.length-1];
