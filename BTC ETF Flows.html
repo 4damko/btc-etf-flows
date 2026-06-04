@@ -25,7 +25,7 @@
   *{box-sizing:border-box}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Arial,sans-serif;
        background:radial-gradient(1200px 600px at 70% -10%,var(--glow),transparent),var(--bg);color:var(--text);
-       transition:background-color .2s,color .2s}
+       transition:background-color .2s,color .2s;overflow-x:hidden}
   .wrap{max-width:1180px;margin:0 auto;padding:28px 20px 60px}
   header{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:6px}
   h1{font-size:22px;margin:0;font-weight:700;letter-spacing:-.3px}
@@ -50,6 +50,7 @@
   .panel{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
          border-radius:18px;padding:18px 18px 8px;margin-bottom:24px}
   .panel h2{font-size:15px;margin:0 0 4px;font-weight:600}
+  .cumarrow{font-size:13px;font-weight:700;margin-left:6px}
   .panel .hint{color:var(--muted);font-size:12px;margin:0 0 14px}
   .toolbar{display:flex;gap:8px;margin:0 0 12px;flex-wrap:wrap}
   .toolbar button{background:var(--panel2);color:var(--muted);border:1px solid var(--line);
@@ -69,7 +70,13 @@
   /* dvojstĺpcové rozloženie: vľavo Prehľad (2/5), vpravo grafy (3/5) */
   .layout{display:grid;grid-template-columns:2fr 3fr;gap:24px;align-items:start;margin-bottom:24px}
   .col-left .panel:last-child,.col-right .panel:last-child{margin-bottom:0}
-  @media(max-width:880px){.layout{grid-template-columns:1fr}}
+  @media(max-width:880px){
+    .layout{display:flex;flex-direction:column;grid-template-columns:none}
+    .col-left,.col-right{display:contents}
+    .col-left .fng{order:1}
+    .col-right>*{order:2;margin-bottom:24px}
+    .col-left .snap{order:3;margin-bottom:0}   /* Prehľad úplne dole */
+  }
   /* prehľadová tabuľka */
   .snap{max-width:none}
   .snapdate{color:var(--muted);font-size:13px;font-weight:400;margin-left:6px}
@@ -156,28 +163,11 @@
     </div>
 
     <div class="panel">
-      <h2>Kumulatívny tok</h2>
-      <p class="hint">Celkový nazbieraný čistý prítok od spustenia ETF (mld. USD).</p>
+      <h2>Kumulatívny tok <span id="cumArrow" class="cumarrow"></span></h2>
+      <p class="hint">Modrá = nazbieraný čistý prítok (mld. USD, ľavá os). Oranžová = cena BTC (pravá os) — korelácia tok vs cena. Šípka = zmena kumulatívu oproti predošlému dňu.</p>
       <canvas id="cumChart"></canvas>
     </div>
     </div>
-    </div>
-
-    <div class="panel">
-      <h2>Rozpis po jednotlivých ETF — posledný deň</h2>
-      <p class="hint">Klikni na hlavičku stĺpca pre zoradenie.</p>
-      <table id="fundsTable">
-        <thead><tr>
-          <th data-k="ticker">ETF</th>
-          <th data-k="dailyNetInflow">Denný tok</th>
-          <th data-k="cumNetInflow">Kumulatívne</th>
-          <th data-k="netAssets">Net assets</th>
-          <th data-k="dailyValueTraded">Obrat</th>
-          <th data-k="fee">Fee</th>
-          <th data-k="netAssets">Podiel</th>
-        </tr></thead>
-        <tbody></tbody>
-      </table>
     </div>
   </div>
 
@@ -226,6 +216,16 @@ const FNG_TR={"Extreme Fear":"Extrémny strach","Fear":"Strach","Neutral":"Neutr
               "Greed":"Chamtivosť","Extreme Greed":"Extrémna chamtivosť"};
 const fngColor=v=> v<=24?"#ea3943" : v<=44?"#ff8c42" : v<=55?"#f3d42f" : v<=75?"#7ac74f" : "#16c784";
 
+// cena BTC (CoinGecko, CORS *, bez kľúča) -> mapa "YYYY-MM-DD": cena
+async function fetchBTC(){
+  const r=await fetch("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=365");
+  if(!r.ok) throw new Error("BTC HTTP "+r.status);
+  const j=await r.json();
+  const map={};
+  (j.prices||[]).forEach(([ts,p])=>{ map[new Date(ts).toISOString().slice(0,10)]=p; });
+  return map;
+}
+
 let DATA = null;
 let flowChart=null, cumChart=null;
 
@@ -234,9 +234,10 @@ async function load(){
   const content=document.getElementById("content");
   btn.disabled=true; st.className="status"; st.textContent="Sťahujem…"; content.classList.add("loading");
   try{
-    const [hist, metrics, fng] = await Promise.all([
+    const [hist, metrics, fng, btc] = await Promise.all([
       api("historicalInflowChart"), api("currentEtfDataMetrics"),
-      fetchFNG().catch(()=>null)   // F&G nesmie zhodiť hlavný dashboard
+      fetchFNG().catch(()=>null),  // F&G nesmie zhodiť hlavný dashboard
+      fetchBTC().catch(()=>null)   // cena BTC tiež nie
     ]);
 
     const series = hist.map(d=>({
@@ -265,7 +266,7 @@ async function load(){
         totalTokenHoldings:num(metrics.totalTokenHoldings),
         dailyTotalValueTraded:num(metrics.dailyTotalValueTraded),
       },
-      series, funds, fng
+      series, funds, fng, btc
     };
 
     renderAll();
@@ -365,16 +366,36 @@ function drawCum(){
   const ser=DATA.series;
   const labels=ser.map(x=>x.date);
   const vals=ser.map(x=> x.cumNetInflow==null? null : x.cumNetInflow/1e9);
+  const btc=DATA.btc;
+  const btcVals = btc ? ser.map(x=> btc[x.date]!=null ? btc[x.date] : null) : null;
+  const hasBtc = !!(btcVals && btcVals.some(v=>v!=null));
+  const datasets=[{label:"Kumulatívny tok",data:vals,borderColor:"#0086ff",backgroundColor:"rgba(0,134,255,.12)",
+        fill:true,tension:.25,pointRadius:0,borderWidth:2,yAxisID:"y"}];
+  if(hasBtc) datasets.push({label:"Cena BTC",data:btcVals,borderColor:"#f7931a",backgroundColor:"transparent",
+        fill:false,tension:.25,pointRadius:0,borderWidth:2,yAxisID:"y1",spanGaps:true});
   if(cumChart) cumChart.destroy();
   cumChart=new Chart(document.getElementById("cumChart"),{
     type:"line",
-    data:{labels,datasets:[{data:vals,borderColor:"#0086ff",backgroundColor:"rgba(0,134,255,.12)",
-          fill:true,tension:.25,pointRadius:0,borderWidth:2}]},
-    options:{responsive:true,plugins:{legend:{display:false},
-      tooltip:{callbacks:{label:c=>"Kumul.: $"+c.parsed.y.toLocaleString("en-US",{maximumFractionDigits:2})+"B"}}},
+    data:{labels,datasets},
+    options:{responsive:true,interaction:{mode:"index",intersect:false},
+      plugins:{legend:{display:hasBtc,position:"top",labels:{color:css('--muted'),boxWidth:12,boxHeight:2,font:{size:11}}},
+      tooltip:{callbacks:{label:c=> c.dataset.yAxisID==="y1"
+        ? "Cena BTC: $"+c.parsed.y.toLocaleString("en-US",{maximumFractionDigits:0})
+        : "Kumul.: $"+c.parsed.y.toLocaleString("en-US",{maximumFractionDigits:2})+"B"}}},
       scales:{x:{ticks:{color:css('--muted'),maxRotation:0,autoSkip:true,maxTicksLimit:10},grid:{display:false}},
-              y:{ticks:{color:css('--muted'),callback:v=>"$"+v+"B"},grid:{color:css('--line')}}}}
+              y:{position:"left",ticks:{color:css('--muted'),callback:v=>"$"+v+"B"},grid:{color:css('--line')}},
+              y1:{position:"right",display:hasBtc,ticks:{color:"#f7931a",callback:v=>"$"+(v/1000).toFixed(0)+"k"},grid:{drawOnChartArea:false}}}}
   });
+  // šípka: zmena kumulatívu oproti predošlému dňu (= posledný denný tok)
+  const arr=document.getElementById("cumArrow");
+  if(arr){
+    const n=ser.length, cur=n? ser[n-1].cumNetInflow:null, prev=n>1? ser[n-2].cumNetInflow:null;
+    if(cur!=null && prev!=null){
+      const d=cur-prev, up=d>=0;
+      arr.textContent=(up?"▲ ":"▼ ")+fmtUSD(Math.abs(d));
+      arr.style.color=up?"#16c784":"#ea3943";
+    } else arr.textContent="";
+  }
 }
 // ---------- trend líniový graf: kĺzavý čistý tok za N dní (3/7/30) ----------
 let candleChart=null, currentCandleN=7;
@@ -439,6 +460,7 @@ function buildRangeButtons(){
 // tabuľka fondov
 let sortK="netAssets", sortDir=-1;
 function renderTable(){
+  if(!document.querySelector("#fundsTable tbody")) return;   // tabuľka odstránená
   const funds=DATA.funds;
   const totalAUM=funds.reduce((a,f)=>a+(f.netAssets||0),0);
   funds.sort((a,b)=>{
