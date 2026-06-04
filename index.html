@@ -138,6 +138,9 @@
     </div>
     <div class="col-right">
 
+    <div class="toolbar" id="candleRange"></div>
+    <div id="trendBadge"></div>
+
     <div class="panel">
       <h2>Denný čistý tok (net flow)</h2>
       <p class="hint">Zelená = prítok (inflow), červená = odlev (outflow). Hodnoty v mil. USD.</p>
@@ -145,13 +148,10 @@
       <canvas id="flowChart"></canvas>
     </div>
 
-    <div id="trendBadge"></div>
-
     <div class="panel">
-      <h2>Trend (sviečky)</h2>
-      <p class="hint">Sviečka = obdobie z kumulatívneho toku. Zelená = obdobie s čistým prítokom (rast),
-        červená = čistý odlev (pokles). Telo = zmena, knôty = max/min v období.</p>
-      <div class="toolbar" id="candleRange"></div>
+      <h2>Trend toku — kĺzavý čistý tok za 3/7/30 dní</h2>
+      <p class="hint">Súčet čistého toku za posledných N dní, v čase. Nad nulou = prevažuje prítok,
+        pod nulou = prevažuje odlev. Ovláda sa prepínačom hore.</p>
       <canvas id="candleChart"></canvas>
     </div>
 
@@ -376,53 +376,41 @@ function drawCum(){
               y:{ticks:{color:css('--muted'),callback:v=>"$"+v+"B"},grid:{color:css('--line')}}}}
   });
 }
-// ---------- sviečkový trend graf (3 / 7 / 30 dní) ----------
-let candleChart=null, currentCandleN=7, lastCandles=[];
-function buildCandles(N){
-  const ser=DATA.series, out=[];
-  for(let i=0;i<ser.length;i+=N){
-    const chunk=ser.slice(i,i+N);
-    const cums=chunk.map(d=>d.cumNetInflow).filter(v=>v!=null);
-    if(!cums.length) continue;
-    const open = (i>0 && ser[i-1].cumNetInflow!=null) ? ser[i-1].cumNetInflow
-               : (chunk[0].cumNetInflow!=null ? chunk[0].cumNetInflow-(chunk[0].totalNetInflow||0) : cums[0]);
-    const close=cums[cums.length-1];
-    out.push({label:chunk[chunk.length-1].date, open, close,
-              high:Math.max(open,...cums), low:Math.min(open,...cums)});
-  }
-  return out;
-}
+// ---------- trend líniový graf: kĺzavý čistý tok za N dní (3/7/30) ----------
+let candleChart=null, currentCandleN=7;
 function drawCandles(N){
   currentCandleN=N;
-  const c=buildCandles(N); lastCandles=c;
-  const labels=c.map(x=>x.label);
-  const col=c.map(x=> x.close>=x.open ? "#16c784":"#ea3943");
-  const body=c.map(x=>[Math.min(x.open,x.close)/1e9, Math.max(x.open,x.close)/1e9]);
-  const wick=c.map(x=>[x.low/1e9, x.high/1e9]);
+  const ser=DATA.series;
+  // kĺzavý N-dňový čistý tok = cum[i] - cum[i-N]  (= súčet denných tokov za posledných N dní)
+  const vals=ser.map((d,i)=>{
+    if(d.cumNetInflow==null) return null;
+    const base = i>=N ? ser[i-N].cumNetInflow
+               : (ser[0].cumNetInflow!=null ? ser[0].cumNetInflow-(ser[0].totalNetInflow||0) : null);
+    return base==null ? null : (d.cumNetInflow-base)/1e9;
+  });
+  const labels=ser.map(d=>d.date);
   if(candleChart) candleChart.destroy();
   candleChart=new Chart(document.getElementById("candleChart"),{
-    type:"bar",
-    data:{labels,datasets:[
-      {data:wick,backgroundColor:col,grouped:false,barThickness:2,order:2},
-      {data:body,backgroundColor:col,grouped:false,barPercentage:0.6,categoryPercentage:0.9,borderRadius:1,order:1}
-    ]},
+    type:"line",
+    data:{labels,datasets:[{data:vals,borderWidth:2,pointRadius:0,tension:.2,
+      borderColor:"#0086ff",
+      segment:{borderColor:c=> (c.p1.parsed.y>=0 ? "#16c784":"#ea3943")},
+      fill:{target:"origin",above:"rgba(22,199,132,.10)",below:"rgba(234,57,67,.10)"}
+    }]},
     options:{responsive:true,plugins:{legend:{display:false},
-      tooltip:{filter:i=>i.datasetIndex===1, callbacks:{title:it=>it[0].label, label:it=>{
-        const k=lastCandles[it.dataIndex];
-        return ["O: $"+(k.open/1e9).toFixed(2)+"B","H: $"+(k.high/1e9).toFixed(2)+"B",
-                "L: $"+(k.low/1e9).toFixed(2)+"B","C: $"+(k.close/1e9).toFixed(2)+"B",
-                "Zmena: "+fmtUSD(k.close-k.open)];
-      }}}},
+      tooltip:{callbacks:{label:c=>(c.parsed.y>=0?"Prítok ":"Odlev ")+"$"+
+        Math.abs(c.parsed.y).toLocaleString("en-US",{maximumFractionDigits:2})+"B / "+N+" dní"}}},
       scales:{x:{ticks:{color:css('--muted'),maxRotation:0,autoSkip:true,maxTicksLimit:10},grid:{display:false}},
               y:{ticks:{color:css('--muted'),callback:v=>"$"+v+"B"},grid:{color:css('--line')}}}}
   });
-  // trend odznak podľa poslednej sviečky
+  // trend odznak = posledná hodnota kĺzavého N-dňového toku
+  let lastVal=null; for(let i=vals.length-1;i>=0;i--){ if(vals[i]!=null){ lastVal=vals[i]*1e9; break; } }
   const el=document.getElementById("trendBadge");
-  if(!c.length){el.innerHTML="";return;}
-  const last=c[c.length-1], delta=last.close-last.open, up=delta>=0;
+  if(lastVal==null){ el.className="trendbadge"; el.innerHTML=""; return; }
+  const up=lastVal>=0;
   el.className="trendbadge "+(up?"up":"down");
   el.innerHTML=(up?"↑ Rastúci trend":"↓ Klesajúci trend")+
-    ` <span class="sm">posledných ${N} dní · čistý ${up?"prítok":"odlev"} ${fmtUSD(Math.abs(delta))}</span>`;
+    ` <span class="sm">posledných ${N} dní · čistý ${up?"prítok":"odlev"} ${fmtUSD(Math.abs(lastVal))}</span>`;
 }
 function buildCandleButtons(){
   const ranges=[["3 dni",3],["7 dní",7],["30 dní",30]];
