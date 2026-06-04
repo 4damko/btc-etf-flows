@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f17">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BTC ETF">
+<title>BTC Spot ETF — Inflow / Outflow (live)</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --brand:#0086ff; --accent:#00d4b3;
+    --green:#16c784; --red:#ea3943;
+    --bg:#0b0f17; --panel:#131a26; --panel2:#1a2332;
+    --line:#243044; --text:#e8edf5; --muted:#8a97ad;
+    --glow:rgba(0,134,255,.12);
+  }
+  html[data-theme="light"]{
+    --bg:#eef2f7; --panel:#ffffff; --panel2:#f4f7fb;
+    --line:#e3e8f0; --text:#0f1722; --muted:#5b6878;
+    --glow:rgba(0,134,255,.08);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Arial,sans-serif;
+       background:radial-gradient(1200px 600px at 70% -10%,var(--glow),transparent),var(--bg);color:var(--text);
+       transition:background-color .2s,color .2s}
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 20px 60px}
+  header{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:6px}
+  h1{font-size:22px;margin:0;font-weight:700;letter-spacing:-.3px}
+  h1 .b{background:linear-gradient(90deg,var(--brand),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:var(--muted);font-size:13px;margin:2px 0 0}
+  .refresh{display:flex;align-items:center;gap:10px}
+  .refresh button{background:var(--brand);color:#fff;border:none;padding:9px 16px;border-radius:10px;
+        font-size:13px;font-weight:600;cursor:pointer;transition:.15s}
+  .refresh button:hover{filter:brightness(1.1)} .refresh button:disabled{opacity:.5;cursor:default}
+  .iconbtn{background:var(--panel2);color:var(--text);border:1px solid var(--line);width:40px;height:38px;
+        border-radius:10px;font-size:16px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+        transition:.15s;padding:0}
+  .iconbtn:hover{border-color:var(--brand)}
+  .status{color:var(--muted);font-size:12px}
+  .status.err{color:var(--red)}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:22px 0 26px}
+  .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
+        border-radius:16px;padding:16px 18px}
+  .card .lbl{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+  .card .val{font-size:24px;font-weight:700;margin-top:6px}
+  .pos{color:var(--green)} .neg{color:var(--red)}
+  .panel{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
+         border-radius:18px;padding:18px 18px 8px;margin-bottom:24px}
+  .panel h2{font-size:15px;margin:0 0 4px;font-weight:600}
+  .panel .hint{color:var(--muted);font-size:12px;margin:0 0 14px}
+  .toolbar{display:flex;gap:8px;margin:0 0 12px;flex-wrap:wrap}
+  .toolbar button{background:var(--panel2);color:var(--muted);border:1px solid var(--line);
+        padding:6px 12px;border-radius:9px;font-size:12px;cursor:pointer;transition:.15s}
+  .toolbar button:hover{color:var(--text)}
+  .toolbar button.active{background:var(--brand);color:#fff;border-color:var(--brand)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:11px 10px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--muted);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.4px;cursor:pointer}
+  th:first-child,td:first-child{text-align:left}
+  tbody tr:hover{background:rgba(255,255,255,.025)}
+  .tk{font-weight:700}
+  .inst{color:var(--muted);font-size:11px}
+  .bar{height:6px;border-radius:4px;background:var(--line);overflow:hidden;min-width:60px;display:inline-block;vertical-align:middle}
+  .bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--brand),var(--accent))}
+  canvas{max-height:340px}
+  /* dvojstĺpcové rozloženie: vľavo Prehľad (2/5), vpravo grafy (3/5) */
+  .layout{display:grid;grid-template-columns:2fr 3fr;gap:24px;align-items:start;margin-bottom:24px}
+  .col-left .panel:last-child,.col-right .panel:last-child{margin-bottom:0}
+  @media(max-width:880px){.layout{grid-template-columns:1fr}}
+  /* prehľadová tabuľka */
+  .snap{max-width:none}
+  .snapdate{color:var(--muted);font-size:13px;font-weight:400;margin-left:6px}
+  .snaptable td{font-size:14px}
+  .snaptable td:first-child{color:var(--muted)}
+  .snaptable .big td{font-size:15px;font-weight:600}
+  .snaptable .big td:first-child{color:var(--text)}
+  .snaptable .sec td{color:var(--brand);font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+        padding-top:16px;border-bottom:1px solid var(--line)}
+  .trendbadge{display:flex;align-items:center;justify-content:center;gap:14px;padding:16px 22px;
+        border-radius:18px;font-weight:800;font-size:21px;margin:0 0 24px;border:1px solid transparent}
+  .trendbadge:empty{display:none}
+  .trendbadge.up{background:rgba(22,199,132,.13);color:var(--green);border-color:rgba(22,199,132,.3)}
+  .trendbadge.down{background:rgba(234,57,67,.13);color:var(--red);border-color:rgba(234,57,67,.3)}
+  .trendbadge .sm{font-weight:500;font-size:14px;color:var(--muted)}
+  /* Fear & Greed widget */
+  .fng-main{display:flex;align-items:baseline;gap:12px;margin:2px 0 14px}
+  .fng-value{font-size:46px;font-weight:800;line-height:1}
+  .fng-class{font-size:16px;font-weight:700}
+  .fng-bar{position:relative;height:10px;border-radius:6px;
+    background:linear-gradient(90deg,#ea3943 0%,#ff8c42 30%,#f3d42f 50%,#7ac74f 70%,#16c784 100%)}
+  .fng-marker{position:absolute;top:-4px;width:4px;height:18px;border-radius:2px;background:var(--text);
+    box-shadow:0 0 0 2px var(--panel);transition:left .3s}
+  .fng-scale{display:flex;justify-content:space-between;color:var(--muted);font-size:11px;margin-top:7px}
+  .fng-hist{margin-top:14px;font-size:12px;color:var(--muted)}
+  .fng-hist b{font-weight:700}
+  footer{color:var(--muted);font-size:12px;text-align:center;margin-top:30px}
+  a{color:var(--accent)}
+  #content{transition:opacity .2s} #content.loading{opacity:.4}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1><span class="b">BTC Spot ETF</span> — Inflow / Outflow</h1>
+      <div class="sub" id="sub">Načítavam…</div>
+    </div>
+    <div class="refresh">
+      <span class="status" id="status"></span>
+      <button class="iconbtn" id="themeBtn" title="Prepnúť tému">☀️</button>
+      <button id="refreshBtn">↻ Obnoviť</button>
+    </div>
+  </header>
+
+  <div id="content">
+    <div class="cards" id="cards"></div>
+
+    <div class="layout">
+    <div class="col-left">
+    <div class="panel fng">
+      <h2>Fear &amp; Greed Index <span class="snapdate" id="fngDate"></span></h2>
+      <p class="hint">Nálada na krypto trhu (0 = extrémny strach, 100 = extrémna chamtivosť).</p>
+      <div class="fng-main">
+        <div class="fng-value" id="fngValue">–</div>
+        <div class="fng-class" id="fngClass">načítavam…</div>
+      </div>
+      <div class="fng-bar"><div class="fng-marker" id="fngMarker" style="left:50%"></div></div>
+      <div class="fng-scale"><span>0</span><span>strach</span><span>chamtivosť</span><span>100</span></div>
+      <div class="fng-hist" id="fngHist"></div>
+    </div>
+    <div class="panel snap">
+      <h2>Prehľad <span id="snapDate" class="snapdate"></span></h2>
+      <table class="snaptable"><tbody id="snapBody"></tbody></table>
+    </div>
+    </div>
+    <div class="col-right">
+
+    <div class="panel">
+      <h2>Denný čistý tok (net flow)</h2>
+      <p class="hint">Zelená = prítok (inflow), červená = odlev (outflow). Hodnoty v mil. USD.</p>
+      <div class="toolbar" id="range"></div>
+      <canvas id="flowChart"></canvas>
+    </div>
+
+    <div id="trendBadge"></div>
+
+    <div class="panel">
+      <h2>Trend (sviečky)</h2>
+      <p class="hint">Sviečka = obdobie z kumulatívneho toku. Zelená = obdobie s čistým prítokom (rast),
+        červená = čistý odlev (pokles). Telo = zmena, knôty = max/min v období.</p>
+      <div class="toolbar" id="candleRange"></div>
+      <canvas id="candleChart"></canvas>
+    </div>
+
+    <div class="panel">
+      <h2>Kumulatívny tok</h2>
+      <p class="hint">Celkový nazbieraný čistý prítok od spustenia ETF (mld. USD).</p>
+      <canvas id="cumChart"></canvas>
+    </div>
+    </div>
+    </div>
+
+    <div class="panel">
+      <h2>Rozpis po jednotlivých ETF — posledný deň</h2>
+      <p class="hint">Klikni na hlavičku stĺpca pre zoradenie.</p>
+      <table id="fundsTable">
+        <thead><tr>
+          <th data-k="ticker">ETF</th>
+          <th data-k="dailyNetInflow">Denný tok</th>
+          <th data-k="cumNetInflow">Kumulatívne</th>
+          <th data-k="netAssets">Net assets</th>
+          <th data-k="dailyValueTraded">Obrat</th>
+          <th data-k="fee">Fee</th>
+          <th data-k="netAssets">Podiel</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>
+    Zdroj: <a href="https://sosovalue.com/assets/etf/us-btc-spot" target="_blank">SoSoValue</a> OpenAPI ·
+    Dáta sa sťahujú naživo pri každom načítaní stránky (refresh = aktuálne čísla).
+  </footer>
+</div>
+
+<script>
+const API = "https://api.sosovalue.xyz/openapi/v2/etf";
+const ASSET = "us-btc-spot";   // pre Ethereum ETF zmeň na "us-eth-spot"
+
+// ---------- pomocné formátovanie ----------
+const fmtUSD = (v,dec=1)=>{
+  if(v==null||isNaN(v)) return "–";
+  const a=Math.abs(v); let s,u;
+  if(a>=1e9){s=v/1e9;u="B";} else if(a>=1e6){s=v/1e6;u="M";} else if(a>=1e3){s=v/1e3;u="K";} else {s=v;u="";}
+  return (v<0?"-$":"$")+Math.abs(s).toLocaleString("en-US",{maximumFractionDigits:dec})+u;
+};
+const cls = v => (v==null||isNaN(v))?"":(v>=0?"pos":"neg");
+const num = m => { const v = m && typeof m==="object" ? m.value : m; const f=parseFloat(v); return isNaN(f)?null:f; };
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+// ---------- načítanie dát z API ----------
+async function api(endpoint){
+  const r = await fetch(`${API}/${endpoint}`, {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({type:ASSET})
+  });
+  if(!r.ok) throw new Error(`${endpoint}: HTTP ${r.status}`);
+  const j = await r.json();
+  if(j.code!==0) throw new Error(`${endpoint}: ${j.msg||"API chyba"}`);
+  return j.data;
+}
+
+// Fear & Greed Index (alternative.me, CORS *)
+async function fetchFNG(){
+  const r=await fetch("https://api.alternative.me/fng/?limit=8");
+  if(!r.ok) throw new Error("FNG HTTP "+r.status);
+  const j=await r.json();
+  return (j.data||[]).map(d=>({value:+d.value, cls:d.value_classification, ts:(+d.timestamp)*1000}));
+}
+const FNG_TR={"Extreme Fear":"Extrémny strach","Fear":"Strach","Neutral":"Neutrálne",
+              "Greed":"Chamtivosť","Extreme Greed":"Extrémna chamtivosť"};
+const fngColor=v=> v<=24?"#ea3943" : v<=44?"#ff8c42" : v<=55?"#f3d42f" : v<=75?"#7ac74f" : "#16c784";
+
+let DATA = null;
+let flowChart=null, cumChart=null;
+
+async function load(){
+  const btn=document.getElementById("refreshBtn"), st=document.getElementById("status");
+  const content=document.getElementById("content");
+  btn.disabled=true; st.className="status"; st.textContent="Sťahujem…"; content.classList.add("loading");
+  try{
+    const [hist, metrics, fng] = await Promise.all([
+      api("historicalInflowChart"), api("currentEtfDataMetrics"),
+      fetchFNG().catch(()=>null)   // F&G nesmie zhodiť hlavný dashboard
+    ]);
+
+    const series = hist.map(d=>({
+      date:d.date,
+      totalNetInflow:num(d.totalNetInflow),
+      totalNetAssets:num(d.totalNetAssets),
+      cumNetInflow:num(d.cumNetInflow),
+      totalValueTraded:num(d.totalValueTraded),
+    })).sort((a,b)=> a.date<b.date?-1:1);
+
+    const funds = (metrics.list||[]).map(f=>({
+      ticker:(f.ticker||"").trim(),
+      institute:(f.institute||"").trim(),
+      fee:num(f.fee),
+      netAssets:num(f.netAssets),
+      dailyNetInflow:num(f.dailyNetInflow),
+      cumNetInflow:num(f.cumNetInflow),
+      dailyValueTraded:num(f.dailyValueTraded),
+    })).sort((a,b)=>(b.netAssets||0)-(a.netAssets||0));
+
+    DATA = {
+      summary:{
+        dailyNetInflow:num(metrics.dailyNetInflow),
+        cumNetInflow:num(metrics.cumNetInflow),
+        totalNetAssets:num(metrics.totalNetAssets),
+        totalTokenHoldings:num(metrics.totalTokenHoldings),
+        dailyTotalValueTraded:num(metrics.dailyTotalValueTraded),
+      },
+      series, funds, fng
+    };
+
+    renderAll();
+    const last = series.length? series[series.length-1].date : "?";
+    document.getElementById("sub").textContent = "Posledný deň: "+last;
+    st.textContent = "Aktualizované "+new Date().toLocaleTimeString("sk-SK");
+  }catch(e){
+    st.className="status err"; st.textContent="Chyba: "+e.message+" (skús refresh / skontroluj internet)";
+    document.getElementById("sub").textContent="Načítanie zlyhalo";
+  }finally{
+    btn.disabled=false; content.classList.remove("loading");
+  }
+}
+
+// ---------- vykreslenie ----------
+function renderAll(){
+  const s=DATA.summary, series=DATA.series;
+
+  // karty
+  const cards=[
+    {lbl:"Denný čistý tok", v:fmtUSD(s.dailyNetInflow), c:cls(s.dailyNetInflow)},
+    {lbl:"Kumulatívny tok", v:fmtUSD(s.cumNetInflow), c:"pos"},
+    {lbl:"Net assets (AUM)", v:fmtUSD(s.totalNetAssets), c:""},
+    {lbl:"Denný obrat", v:fmtUSD(s.dailyTotalValueTraded), c:""},
+    {lbl:"BTC v držbe", v:(s.totalTokenHoldings!=null? Math.round(s.totalTokenHoldings).toLocaleString("en-US")+" ₿":"–"), c:""},
+  ];
+  document.getElementById("cards").innerHTML = cards.map(c=>
+    `<div class="card"><div class="lbl">${c.lbl}</div><div class="val ${c.c}">${c.v}</div></div>`).join("");
+
+  // prehľadová tabuľka (3 / 7 / 30 dní)
+  const last = series[series.length-1];
+  document.getElementById("snapDate").textContent = last? last.date : "";
+  const top=[
+    ["Denný tok", fmtUSD(s.dailyNetInflow), cls(s.dailyNetInflow)],
+    ["Kumulatív", fmtUSD(s.cumNetInflow), "pos"],
+    ["AUM", fmtUSD(s.totalNetAssets), ""],
+    ["BTC v držbe", (s.totalTokenHoldings!=null? Math.round(s.totalTokenHoldings).toLocaleString("en-US")+" ₿":"–"), ""],
+  ];
+  let h = top.map(r=>`<tr class="big"><td>${r[0]}</td><td class="${r[2]}">${r[1]}</td></tr>`).join("");
+  const dayRows = n => series.slice(-n).reverse().map(d=>
+    `<tr><td>${d.date}</td><td class="${cls(d.totalNetInflow)}">${fmtUSD(d.totalNetInflow)}</td></tr>`).join("");
+  [["Posledné 3 dni",3],["Posledných 7 dní",7],["Posledných 30 dní",30]].forEach(([title,n])=>{
+    h += `<tr class="sec"><td colspan="2">${title}</td></tr>` + dayRows(n);
+  });
+  document.getElementById("snapBody").innerHTML = h;
+
+  // Fear & Greed
+  renderFNG();
+
+  // grafy
+  buildRangeButtons();
+  drawFlow(currentRange);
+  drawCum();
+  buildCandleButtons();
+  drawCandles(currentCandleN);
+
+  // tabuľka fondov
+  renderTable();
+}
+
+// ---------- Fear & Greed render ----------
+function renderFNG(){
+  const f=DATA.fng;
+  const valEl=document.getElementById("fngValue"), clsEl=document.getElementById("fngClass");
+  if(!f||!f.length){ valEl.textContent="–"; clsEl.textContent="nedostupné"; clsEl.style.color="var(--muted)"; return; }
+  const cur=f[0], col=fngColor(cur.value);
+  valEl.textContent=cur.value; valEl.style.color=col;
+  clsEl.textContent=FNG_TR[cur.cls]||cur.cls; clsEl.style.color=col;
+  document.getElementById("fngMarker").style.left=Math.max(0,Math.min(100,cur.value))+"%";
+  document.getElementById("fngDate").textContent=new Date(cur.ts).toLocaleDateString("sk-SK");
+  const y=f[1], w=f[7]||f[f.length-1];
+  document.getElementById("fngHist").innerHTML=
+    (y?`Včera: <b style="color:${fngColor(y.value)}">${y.value}</b>`:"")+
+    (w?` &nbsp;·&nbsp; Pred týždňom: <b style="color:${fngColor(w.value)}">${w.value}</b>`:"");
+}
+
+// flow + cum grafy
+function sliceData(n){ const ser=DATA.series; return n>=ser.length? ser : ser.slice(ser.length-n); }
+let currentRange = 90;
+function drawFlow(n){
+  currentRange=n;
+  const d=sliceData(n);
+  const labels=d.map(x=>x.date);
+  const vals=d.map(x=> x.totalNetInflow==null? null : x.totalNetInflow/1e6);
+  const colors=vals.map(v=> v>=0? "#16c784":"#ea3943");
+  if(flowChart) flowChart.destroy();
+  flowChart=new Chart(document.getElementById("flowChart"),{
+    type:"bar",
+    data:{labels,datasets:[{data:vals,backgroundColor:colors,borderRadius:3,barPercentage:1,categoryPercentage:.9}]},
+    options:{responsive:true,plugins:{legend:{display:false},
+      tooltip:{callbacks:{label:c=>"Net flow: $"+c.parsed.y.toLocaleString("en-US",{maximumFractionDigits:1})+"M"}}},
+      scales:{x:{ticks:{color:css('--muted'),maxRotation:0,autoSkip:true,maxTicksLimit:10},grid:{display:false}},
+              y:{ticks:{color:css('--muted'),callback:v=>v+"M"},grid:{color:css('--line')}}}}
+  });
+}
+function drawCum(){
+  const ser=DATA.series;
+  const labels=ser.map(x=>x.date);
+  const vals=ser.map(x=> x.cumNetInflow==null? null : x.cumNetInflow/1e9);
+  if(cumChart) cumChart.destroy();
+  cumChart=new Chart(document.getElementById("cumChart"),{
+    type:"line",
+    data:{labels,datasets:[{data:vals,borderColor:"#0086ff",backgroundColor:"rgba(0,134,255,.12)",
+          fill:true,tension:.25,pointRadius:0,borderWidth:2}]},
+    options:{responsive:true,plugins:{legend:{display:false},
+      tooltip:{callbacks:{label:c=>"Kumul.: $"+c.parsed.y.toLocaleString("en-US",{maximumFractionDigits:2})+"B"}}},
+      scales:{x:{ticks:{color:css('--muted'),maxRotation:0,autoSkip:true,maxTicksLimit:10},grid:{display:false}},
+              y:{ticks:{color:css('--muted'),callback:v=>"$"+v+"B"},grid:{color:css('--line')}}}}
+  });
+}
+// ---------- sviečkový trend graf (3 / 7 / 30 dní) ----------
+let candleChart=null, currentCandleN=7, lastCandles=[];
+function buildCandles(N){
+  const ser=DATA.series, out=[];
+  for(let i=0;i<ser.length;i+=N){
+    const chunk=ser.slice(i,i+N);
+    const cums=chunk.map(d=>d.cumNetInflow).filter(v=>v!=null);
+    if(!cums.length) continue;
+    const open = (i>0 && ser[i-1].cumNetInflow!=null) ? ser[i-1].cumNetInflow
+               : (chunk[0].cumNetInflow!=null ? chunk[0].cumNetInflow-(chunk[0].totalNetInflow||0) : cums[0]);
+    const close=cums[cums.length-1];
+    out.push({label:chunk[chunk.length-1].date, open, close,
+              high:Math.max(open,...cums), low:Math.min(open,...cums)});
+  }
+  return out;
+}
+function drawCandles(N){
+  currentCandleN=N;
+  const c=buildCandles(N); lastCandles=c;
+  const labels=c.map(x=>x.label);
+  const col=c.map(x=> x.close>=x.open ? "#16c784":"#ea3943");
+  const body=c.map(x=>[Math.min(x.open,x.close)/1e9, Math.max(x.open,x.close)/1e9]);
+  const wick=c.map(x=>[x.low/1e9, x.high/1e9]);
+  if(candleChart) candleChart.destroy();
+  candleChart=new Chart(document.getElementById("candleChart"),{
+    type:"bar",
+    data:{labels,datasets:[
+      {data:wick,backgroundColor:col,grouped:false,barThickness:2,order:2},
+      {data:body,backgroundColor:col,grouped:false,barPercentage:0.6,categoryPercentage:0.9,borderRadius:1,order:1}
+    ]},
+    options:{responsive:true,plugins:{legend:{display:false},
+      tooltip:{filter:i=>i.datasetIndex===1, callbacks:{title:it=>it[0].label, label:it=>{
+        const k=lastCandles[it.dataIndex];
+        return ["O: $"+(k.open/1e9).toFixed(2)+"B","H: $"+(k.high/1e9).toFixed(2)+"B",
+                "L: $"+(k.low/1e9).toFixed(2)+"B","C: $"+(k.close/1e9).toFixed(2)+"B",
+                "Zmena: "+fmtUSD(k.close-k.open)];
+      }}}},
+      scales:{x:{ticks:{color:css('--muted'),maxRotation:0,autoSkip:true,maxTicksLimit:10},grid:{display:false}},
+              y:{ticks:{color:css('--muted'),callback:v=>"$"+v+"B"},grid:{color:css('--line')}}}}
+  });
+  // trend odznak podľa poslednej sviečky
+  const el=document.getElementById("trendBadge");
+  if(!c.length){el.innerHTML="";return;}
+  const last=c[c.length-1], delta=last.close-last.open, up=delta>=0;
+  el.className="trendbadge "+(up?"up":"down");
+  el.innerHTML=(up?"↑ Rastúci trend":"↓ Klesajúci trend")+
+    ` <span class="sm">posledných ${N} dní · čistý ${up?"prítok":"odlev"} ${fmtUSD(Math.abs(delta))}</span>`;
+}
+function buildCandleButtons(){
+  const ranges=[["3 dni",3],["7 dní",7],["30 dní",30]];
+  const el=document.getElementById("candleRange"); el.innerHTML="";
+  ranges.forEach(([t,n])=>{
+    const b=document.createElement("button"); b.textContent=t;
+    if(n===currentCandleN) b.classList.add("active");
+    b.onclick=()=>{document.querySelectorAll("#candleRange button").forEach(x=>x.classList.remove("active"));
+                   b.classList.add("active"); drawCandles(n);};
+    el.appendChild(b);
+  });
+}
+
+function buildRangeButtons(){
+  const ranges=[["30D",30],["90D",90],["180D",180],["1R",365],["Max",99999]];
+  const el=document.getElementById("range"); el.innerHTML="";
+  ranges.forEach(([t,n])=>{
+    const b=document.createElement("button"); b.textContent=t;
+    if(n===currentRange) b.classList.add("active");
+    b.onclick=()=>{document.querySelectorAll("#range button").forEach(x=>x.classList.remove("active"));
+                   b.classList.add("active"); drawFlow(n);};
+    el.appendChild(b);
+  });
+}
+
+// tabuľka fondov
+let sortK="netAssets", sortDir=-1;
+function renderTable(){
+  const funds=DATA.funds;
+  const totalAUM=funds.reduce((a,f)=>a+(f.netAssets||0),0);
+  funds.sort((a,b)=>{
+    let x=a[sortK],y=b[sortK];
+    if(typeof x==="string"){x=x||"";y=y||"";return sortDir*x.localeCompare(y);}
+    return sortDir*(((x||0)-(y||0)));
+  });
+  document.querySelector("#fundsTable tbody").innerHTML = funds.map(f=>{
+    const share=totalAUM? (f.netAssets||0)/totalAUM*100:0;
+    return `<tr>
+      <td><span class="tk">${f.ticker}</span><br><span class="inst">${f.institute||""}</span></td>
+      <td class="${cls(f.dailyNetInflow)}">${fmtUSD(f.dailyNetInflow)}</td>
+      <td class="${cls(f.cumNetInflow)}">${fmtUSD(f.cumNetInflow)}</td>
+      <td>${fmtUSD(f.netAssets)}</td>
+      <td>${fmtUSD(f.dailyValueTraded)}</td>
+      <td>${f.fee!=null? (f.fee*100).toFixed(2)+"%":"–"}</td>
+      <td><span class="bar"><i style="width:${share.toFixed(1)}%"></i></span> ${share.toFixed(1)}%</td>
+    </tr>`;
+  }).join("");
+}
+document.querySelectorAll("#fundsTable th").forEach(th=>{
+  th.onclick=()=>{const k=th.dataset.k; if(k===sortK)sortDir*=-1; else {sortK=k;sortDir=-1;} if(DATA) renderTable();};
+});
+
+document.getElementById("refreshBtn").onclick = load;
+
+// ---------- prepínač svetlá / tmavá téma ----------
+const themeBtn=document.getElementById("themeBtn");
+function applyTheme(t){
+  document.documentElement.dataset.theme=t;
+  themeBtn.textContent = t==="light" ? "🌙" : "☀️";
+  themeBtn.title = t==="light" ? "Tmavá téma" : "Svetlá téma";
+  localStorage.setItem("btcetf-theme",t);
+  if(DATA){ drawFlow(currentRange); drawCum(); drawCandles(currentCandleN); }   // prekresli grafy s novými farbami
+}
+themeBtn.onclick=()=>applyTheme(document.documentElement.dataset.theme==="light"?"dark":"light");
+applyTheme(localStorage.getItem("btcetf-theme")||"dark");
+
+load();
+</script>
+</body>
+</html>
