@@ -77,10 +77,11 @@
   @media(max-width:880px){
     .layout{display:flex;flex-direction:column;grid-template-columns:none}
     .col-left,.col-right{display:contents}
-    .col-left .fng{order:1}
-    .col-left .month{order:2}
-    .col-right>*{order:3;margin-bottom:24px}
-    .col-left .snap{order:4;margin-bottom:0}   /* Prehľad úplne dole */
+    .col-left .ussession{order:1}
+    .col-left .fng{order:2}
+    .col-left .month{order:3}
+    .col-right>*{order:4;margin-bottom:24px}
+    .col-left .snap{order:5;margin-bottom:0}   /* Prehľad úplne dole */
   }
   /* prehľadová tabuľka */
   .snap{max-width:none}
@@ -108,6 +109,15 @@
   .fng-scale{display:flex;justify-content:space-between;color:var(--muted);font-size:11px;margin-top:7px}
   .fng-hist{margin-top:14px;font-size:12px;color:var(--muted)}
   .fng-hist b{font-weight:700}
+  /* US burza widget */
+  .us-main{display:flex;align-items:center;gap:9px;margin:6px 0 10px;flex-wrap:wrap}
+  .us-dot{width:11px;height:11px;border-radius:50%;background:var(--muted);flex-shrink:0}
+  .us-dot.open{background:var(--green);box-shadow:0 0 0 4px rgba(22,199,132,.18)}
+  .us-dot.closed{background:var(--red);box-shadow:0 0 0 4px rgba(234,57,67,.14)}
+  .us-text{font-size:17px;font-weight:700}
+  .us-sub{color:var(--muted);font-size:12px;font-weight:500}
+  .us-btc{font-size:13px;color:var(--muted)}
+  .us-btc b{font-weight:700}
   footer{color:var(--muted);font-size:12px;text-align:center;margin-top:30px}
   a{color:var(--accent)}
   #content{transition:opacity .2s} #content.loading{opacity:.4}
@@ -132,6 +142,16 @@
 
     <div class="layout">
     <div class="col-left">
+    <div class="panel ussession">
+      <h2>US burza</h2>
+      <p class="hint">Otváracie hodiny 15:30–22:00 (náš čas). Pozn.: dnešný ETF tok pribudne až zajtra ráno — intradenne sa toky nepublikujú.</p>
+      <div class="us-main">
+        <span class="us-dot" id="usDot"></span>
+        <span class="us-text" id="usText">—</span>
+        <span class="us-sub" id="usSub"></span>
+      </div>
+      <div class="us-btc" id="usBtc"></div>
+    </div>
     <div class="panel fng">
       <h2>Fear &amp; Greed Index <span class="snapdate" id="fngDate"></span></h2>
       <p class="hint">Nálada na krypto trhu (0 = extrémny strach, 100 = extrémna chamtivosť).</p>
@@ -235,6 +255,13 @@ async function fetchBTC(){
   (j.prices||[]).forEach(([ts,p])=>{ map[new Date(ts).toISOString().slice(0,10)]=p; });
   return map;
 }
+// intradenná BTC (posledných 24h, ~5-min) pre US-séansu
+async function fetchBTC1d(){
+  const r=await fetch("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1");
+  if(!r.ok) throw new Error("BTC1d HTTP "+r.status);
+  const j=await r.json();
+  return j.prices||[];   // [[ts_ms, price], ...]
+}
 
 let DATA = null;
 let flowChart=null, cumChart=null;
@@ -244,10 +271,11 @@ async function load(){
   const content=document.getElementById("content");
   btn.disabled=true; st.className="status"; st.textContent="Sťahujem…"; content.classList.add("loading");
   try{
-    const [hist, metrics, fng, btc] = await Promise.all([
+    const [hist, metrics, fng, btc, btc1d] = await Promise.all([
       api("historicalInflowChart"), api("currentEtfDataMetrics"),
       fetchFNG().catch(()=>null),  // F&G nesmie zhodiť hlavný dashboard
-      fetchBTC().catch(()=>null)   // cena BTC tiež nie
+      fetchBTC().catch(()=>null),  // cena BTC tiež nie
+      fetchBTC1d().catch(()=>null) // intradenná BTC pre US-séansu
     ]);
 
     const series = hist.map(d=>({
@@ -276,7 +304,7 @@ async function load(){
         totalTokenHoldings:num(metrics.totalTokenHoldings),
         dailyTotalValueTraded:num(metrics.dailyTotalValueTraded),
       },
-      series, funds, fng, btc
+      series, funds, fng, btc, btc1d
     };
 
     renderAll();
@@ -330,6 +358,7 @@ function renderAll(){
   // Fear & Greed
   renderFNG();
   renderMonth();
+  renderUS();
 
   // grafy
   buildRangeButtons();
@@ -376,6 +405,61 @@ function renderMonth(){
   ];
   body.innerHTML=rows.map(r=>
     `<tr class="${r[3]?'big':''}"><td>${r[0]}</td><td class="${r[2]}">${r[1]}</td></tr>`).join("");
+}
+
+// ---------- US burza: status + odpočet + BTC od otvorenia ----------
+function fmtDur(ms){
+  let m=Math.max(0,Math.round(ms/60000));
+  const d=Math.floor(m/1440); m-=d*1440;
+  const h=Math.floor(m/60); m-=h*60;
+  return (d?d+"d ":"")+((h||d)?h+"h ":"")+m+"m";
+}
+function usSession(){
+  const now=new Date();
+  const et=new Date(now.toLocaleString("en-US",{timeZone:"America/New_York"}));  // ET wall-clock
+  const day=et.getDay(), mins=et.getHours()*60+et.getMinutes();
+  const OPEN=570, CLOSE=960;                       // 9:30, 16:00 ET
+  const isOpen = day>=1 && day<=5 && mins>=OPEN && mins<CLOSE;
+  let target, ms;
+  if(isOpen){ target=new Date(et); target.setHours(16,0,0,0); ms=target-et; }
+  else {
+    target=new Date(et); target.setHours(9,30,0,0);
+    if(!(day>=1&&day<=5) || mins>=OPEN) target.setDate(target.getDate()+1);
+    while(target.getDay()===0||target.getDay()===6) target.setDate(target.getDate()+1);
+    ms=target-et;
+  }
+  // minúty od posledného otvorenia (na zarátanie BTC zmeny)
+  let lo=new Date(et); lo.setHours(9,30,0,0);
+  if(!(et>=lo && day>=1 && day<=5)){
+    lo.setDate(lo.getDate()-1);
+    while(lo.getDay()===0||lo.getDay()===6) lo.setDate(lo.getDate()-1);
+  }
+  const minsSinceOpen=(et-lo)/60000;
+  return {isOpen, ms, minsSinceOpen};
+}
+function renderUS(){
+  const dot=document.getElementById("usDot"); if(!dot) return;
+  const txt=document.getElementById("usText"), sub=document.getElementById("usSub"), btcEl=document.getElementById("usBtc");
+  const s=usSession();
+  dot.className="us-dot "+(s.isOpen?"open":"closed");
+  txt.textContent=s.isOpen?"Otvorené":"Zatvorené";
+  txt.style.color=s.isOpen?"var(--green)":"var(--text)";
+  sub.textContent=(s.isOpen?"zatvára o ":"otvára o ")+fmtDur(s.ms);
+  // BTC od otvorenia seansy
+  const arr=DATA&&DATA.btc1d;
+  if(arr&&arr.length){
+    const nowP=arr[arr.length-1][1];
+    const openMs=Date.now()-s.minsSinceOpen*60000;
+    let label, openP=null;
+    if(openMs>=arr[0][0]){
+      let best=arr[0]; for(const p of arr) if(Math.abs(p[0]-openMs)<Math.abs(best[0]-openMs)) best=p;
+      openP=best[1]; label="od otvorenia";
+    } else { openP=arr[0][1]; label="za 24h"; }   // otvorenie mimo dosahu (víkend) -> 24h
+    const pct=openP? (nowP-openP)/openP*100 : null;
+    const cl=pct>=0?"pos":"neg";
+    btcEl.innerHTML="BTC <b>$"+Math.round(nowP).toLocaleString("en-US")+"</b> · "+label+" "+
+      (pct==null?"–":`<b class="${cl}">${pct>=0?"+":""}${pct.toFixed(2)}%</b>`);
+  } else btcEl.textContent="";
 }
 
 // flow + cum grafy
@@ -533,6 +617,9 @@ function applyTheme(t){
 }
 themeBtn.onclick=()=>applyTheme(document.documentElement.dataset.theme==="light"?"dark":"light");
 applyTheme(localStorage.getItem("btcetf-theme")||"dark");
+
+// odpočet US burzy aktualizuj každú minútu (status sa mení časom)
+setInterval(()=>{ if(DATA) renderUS(); }, 60000);
 
 load();
 </script>
