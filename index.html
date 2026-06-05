@@ -78,8 +78,9 @@
     .layout{display:flex;flex-direction:column;grid-template-columns:none}
     .col-left,.col-right{display:contents}
     .col-left .fng{order:1}
-    .col-right>*{order:2;margin-bottom:24px}
-    .col-left .snap{order:3;margin-bottom:0}   /* Prehľad úplne dole */
+    .col-left .month{order:2}
+    .col-right>*{order:3;margin-bottom:24px}
+    .col-left .snap{order:4;margin-bottom:0}   /* Prehľad úplne dole */
   }
   /* prehľadová tabuľka */
   .snap{max-width:none}
@@ -141,6 +142,11 @@
       <div class="fng-bar"><div class="fng-marker" id="fngMarker" style="left:50%"></div></div>
       <div class="fng-scale"><span>0</span><span>strach</span><span>chamtivosť</span><span>100</span></div>
       <div class="fng-hist" id="fngHist"></div>
+    </div>
+    <div class="panel month">
+      <h2>Tento mesiac <span class="snapdate" id="monthName"></span></h2>
+      <p class="hint">Súčet prítokov, odlevov a čistá bilancia za aktuálny mesiac.</p>
+      <table class="snaptable"><tbody id="monthBody"></tbody></table>
     </div>
     <div class="panel snap">
       <h2>Prehľad <span id="snapDate" class="snapdate"></span></h2>
@@ -323,6 +329,7 @@ function renderAll(){
 
   // Fear & Greed
   renderFNG();
+  renderMonth();
 
   // grafy
   buildRangeButtons();
@@ -349,6 +356,26 @@ function renderFNG(){
   document.getElementById("fngHist").innerHTML=
     (y?`Včera: <b style="color:${fngColor(y.value)}">${y.value}</b>`:"")+
     (w?` &nbsp;·&nbsp; Pred týždňom: <b style="color:${fngColor(w.value)}">${w.value}</b>`:"");
+}
+
+// ---------- Mesačná bilancia (prítoky / odlevy / netto za aktuálny mesiac) ----------
+function renderMonth(){
+  const body=document.getElementById("monthBody"); if(!body) return;
+  const ser=DATA.series; if(!ser.length){ body.innerHTML=""; return; }
+  const ym=ser[ser.length-1].date.slice(0,7);           // napr. "2026-06"
+  const mon=ser.filter(d=>d.date.startsWith(ym));
+  let inf=0, outf=0;
+  mon.forEach(d=>{ const v=d.totalNetInflow; if(v==null)return; if(v>=0) inf+=v; else outf+=v; });
+  const net=inf+outf;
+  const nameEl=document.getElementById("monthName");
+  if(nameEl) nameEl.textContent=new Date(ym+"-01T00:00:00").toLocaleDateString("sk-SK",{month:"long",year:"numeric"});
+  const rows=[
+    ["Prítoky","+"+fmtUSD(inf),"pos",false],
+    ["Odlevy",fmtUSD(outf),"neg",false],
+    ["Bilancia netto",(net>=0?"+":"")+fmtUSD(net),net>=0?"pos":"neg",true],
+  ];
+  body.innerHTML=rows.map(r=>
+    `<tr class="${r[3]?'big':''}"><td>${r[0]}</td><td class="${r[2]}">${r[1]}</td></tr>`).join("");
 }
 
 // flow + cum grafy
