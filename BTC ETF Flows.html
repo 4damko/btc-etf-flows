@@ -199,6 +199,15 @@
       <p class="hint">Modrá = nazbieraný čistý prítok (mld. USD, ľavá os). Oranžová = cena BTC (pravá os) — korelácia tok vs cena. Šípka = zmena kumulatívu oproti predošlému dňu.</p>
       <canvas id="cumChart"></canvas>
     </div>
+
+    <div class="panel">
+      <h2>RSI &amp; divergencie (BTC)</h2>
+      <p class="hint">RSI(14) z ceny BTC. Pásma 70 = prekúpené, 30 = prepredané. Odznak hlási aktuálnu
+        divergenciu cena↔RSI (regular/hidden, bull/bear).</p>
+      <div class="toolbar" id="rsiRange"></div>
+      <div id="rsiDiv"></div>
+      <canvas id="rsiChart"></canvas>
+    </div>
     </div>
     </div>
   </div>
@@ -253,9 +262,17 @@ async function fetchBTC(){
   const r=await fetch("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=365");
   if(!r.ok) throw new Error("BTC HTTP "+r.status);
   const j=await r.json();
+  const prices=j.prices||[];
   const map={};
-  (j.prices||[]).forEach(([ts,p])=>{ map[new Date(ts).toISOString().slice(0,10)]=p; });
-  return map;
+  prices.forEach(([ts,p])=>{ map[new Date(ts).toISOString().slice(0,10)]=p; });
+  return {map, series:prices.map(([t,c])=>({t,c}))};   // map pre overlay, series pre RSI
+}
+// hodinová BTC (posledných ~90 dní) pre hodinové RSI — sťahuje sa lazy
+async function fetchBTCHourly(){
+  const r=await fetch("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=90");
+  if(!r.ok) throw new Error("BTCh HTTP "+r.status);
+  const j=await r.json();
+  return (j.prices||[]).map(([t,c])=>({t,c}));
 }
 // intradenná BTC (posledných 24h, ~5-min) pre US-séansu
 async function fetchBTC1d(){
@@ -306,7 +323,9 @@ async function load(){
         totalTokenHoldings:num(metrics.totalTokenHoldings),
         dailyTotalValueTraded:num(metrics.dailyTotalValueTraded),
       },
-      series, funds, fng, btc, btc1d
+      series, funds, fng,
+      btc: btc?btc.map:null, btcDaily: btc?btc.series:null, btcHourly:null,
+      btc1d
     };
 
     renderAll();
@@ -368,6 +387,8 @@ function renderAll(){
   drawCum();
   buildCandleButtons();
   drawCandles(currentCandleN);
+  buildRsiButtons();
+  drawRSI(currentRsiTf);
 
   // tabuľka fondov
   renderTable();
@@ -566,6 +587,110 @@ function buildCandleButtons(){
   });
 }
 
+// ---------- RSI + divergencie (BTC) ----------
+let rsiChart=null, currentRsiTf="1d";
+function computeRSI(c,p){
+  p=p||14; const out=new Array(c.length).fill(null);
+  if(c.length<p+1) return out;
+  let g=0,l=0;
+  for(let i=1;i<=p;i++){const ch=c[i]-c[i-1]; if(ch>=0)g+=ch; else l-=ch;}
+  let ag=g/p, al=l/p;
+  out[p]= al===0?100:100-100/(1+ag/al);
+  for(let i=p+1;i<c.length;i++){
+    const ch=c[i]-c[i-1], gg=ch>0?ch:0, ll=ch<0?-ch:0;
+    ag=(ag*(p-1)+gg)/p; al=(al*(p-1)+ll)/p;
+    out[i]= al===0?100:100-100/(1+ag/al);
+  }
+  return out;
+}
+// pivoty na cene + porovnanie s RSI → posledné dva swingy
+function detectDivergence(c, rsi, lb){
+  const lows=[], highs=[];
+  for(let i=lb;i<c.length-lb;i++){
+    let isL=true,isH=true;
+    for(let j=i-lb;j<=i+lb;j++){ if(j===i)continue; if(c[j]<c[i])isL=false; if(c[j]>c[i])isH=false; }
+    if(isL) lows.push(i); if(isH) highs.push(i);
+  }
+  const res={regularBull:null,hiddenBull:null,regularBear:null,hiddenBear:null};
+  if(lows.length>=2){ const a=lows[lows.length-2], b=lows[lows.length-1];
+    if(rsi[a]!=null&&rsi[b]!=null){
+      if(c[b]<c[a] && rsi[b]>rsi[a]) res.regularBull={a,b};
+      else if(c[b]>c[a] && rsi[b]<rsi[a]) res.hiddenBull={a,b};
+    }}
+  if(highs.length>=2){ const a=highs[highs.length-2], b=highs[highs.length-1];
+    if(rsi[a]!=null&&rsi[b]!=null){
+      if(c[b]>c[a] && rsi[b]<rsi[a]) res.regularBear={a,b};
+      else if(c[b]<c[a] && rsi[b]>rsi[a]) res.hiddenBear={a,b};
+    }}
+  return res;
+}
+const rsiBands={id:"rsiBands",afterDraw(ch){
+  const a=ch.chartArea, y=ch.scales.y; if(!a||!y) return; const x=ch.ctx;
+  [[70,"#ea3943"],[50,"#8a97ad"],[30,"#16c784"]].forEach(([lvl,col])=>{
+    const yy=y.getPixelForValue(lvl); x.save(); x.strokeStyle=col; x.globalAlpha=.45;
+    x.setLineDash([4,4]); x.lineWidth=1; x.beginPath(); x.moveTo(a.left,yy); x.lineTo(a.right,yy); x.stroke(); x.restore();
+  });
+}};
+function updateRsiBadge(div, rsi){
+  const el=document.getElementById("rsiDiv"); if(!el) return;
+  let cur=null; for(let i=rsi.length-1;i>=0;i--){ if(rsi[i]!=null){cur=rsi[i];break;} }
+  const zone = cur==null?"":(cur>=70?" · prekúpené":cur<=30?" · prepredané":" · neutrál");
+  const curTxt = "RSI "+(cur==null?"–":cur.toFixed(1))+zone;
+  const cand=[
+    {t:"🟢 Regular bullish divergencia", up:true, d:div.regularBull},
+    {t:"🟢 Hidden bullish divergencia",  up:true, d:div.hiddenBull},
+    {t:"🔴 Regular bearish divergencia", up:false,d:div.regularBear},
+    {t:"🔴 Hidden bearish divergencia",  up:false,d:div.hiddenBear},
+  ].filter(o=>o.d).sort((x,y)=>y.d.b-x.d.b);
+  if(!cand.length){ el.className="trendbadge";
+    el.innerHTML=`<span class="sm" style="font-size:13px">Žiadna aktívna divergencia &nbsp;·&nbsp; ${curTxt}</span>`; return; }
+  const top=cand[0];
+  el.className="trendbadge "+(top.up?"up":"down");
+  el.innerHTML = top.t + ` <span class="sm">${curTxt}</span>`;
+}
+function renderRSI(series, tf){
+  const el=document.getElementById("rsiDiv");
+  if(!series || series.length<20){ if(rsiChart){rsiChart.destroy();rsiChart=null;}
+    if(el){el.className="trendbadge";el.innerHTML='<span class="sm">RSI dáta nedostupné</span>';} return; }
+  const closes=series.map(s=>s.c);
+  const rsi=computeRSI(closes,14);
+  const hourly = tf==="1h";
+  const labels=series.map(s=>{ const iso=new Date(s.t).toISOString(); return hourly? iso.slice(5,13).replace("T"," ")+"h" : iso.slice(0,10); });
+  if(rsiChart) rsiChart.destroy();
+  rsiChart=new Chart(document.getElementById("rsiChart"),{
+    type:"line",
+    data:{labels,datasets:[{data:rsi,borderColor:"#a855f7",borderWidth:2,pointRadius:0,tension:.2,fill:false,spanGaps:true}]},
+    options:{responsive:true,plugins:{legend:{display:false},
+      tooltip:{callbacks:{label:c=>"RSI: "+(c.parsed.y==null?"–":c.parsed.y.toFixed(1))}}},
+      scales:{x:{ticks:{color:css('--muted'),maxRotation:0,autoSkip:true,maxTicksLimit:8},grid:{display:false}},
+              y:{min:0,max:100,ticks:{color:css('--muted'),stepSize:20},grid:{color:css('--line')}}}},
+    plugins:[rsiBands]
+  });
+  updateRsiBadge(detectDivergence(closes,rsi, hourly?10:5), rsi);
+}
+function drawRSI(tf){
+  currentRsiTf=tf;
+  if(tf==="1h"){
+    if(DATA.btcHourly){ renderRSI(DATA.btcHourly,"1h"); }
+    else {
+      const el=document.getElementById("rsiDiv"); if(el){el.className="trendbadge";el.innerHTML='<span class="sm">Sťahujem hodinové dáta…</span>';}
+      fetchBTCHourly().then(s=>{ DATA.btcHourly=s; if(currentRsiTf==="1h") renderRSI(s,"1h"); })
+                      .catch(()=>{ if(currentRsiTf==="1h") renderRSI(null,"1h"); });
+    }
+  } else { renderRSI(DATA.btcDaily,"1d"); }
+}
+function buildRsiButtons(){
+  const ranges=[["Denný","1d"],["Hodinový","1h"]];
+  const el=document.getElementById("rsiRange"); if(!el) return; el.innerHTML="";
+  ranges.forEach(([t,tf])=>{
+    const b=document.createElement("button"); b.textContent=t;
+    if(tf===currentRsiTf) b.classList.add("active");
+    b.onclick=()=>{document.querySelectorAll("#rsiRange button").forEach(x=>x.classList.remove("active"));
+                   b.classList.add("active"); drawRSI(tf);};
+    el.appendChild(b);
+  });
+}
+
 function buildRangeButtons(){
   const ranges=[["30D",30],["90D",90],["180D",180],["1R",365],["Max",99999]];
   const el=document.getElementById("range"); el.innerHTML="";
@@ -615,7 +740,7 @@ function applyTheme(t){
   themeBtn.textContent = t==="light" ? "🌙" : "☀️";
   themeBtn.title = t==="light" ? "Tmavá téma" : "Svetlá téma";
   localStorage.setItem("btcetf-theme",t);
-  if(DATA){ drawFlow(currentRange); drawCum(); drawCandles(currentCandleN); }   // prekresli grafy s novými farbami
+  if(DATA){ drawFlow(currentRange); drawCum(); drawCandles(currentCandleN); drawRSI(currentRsiTf); }   // prekresli grafy s novými farbami
 }
 themeBtn.onclick=()=>applyTheme(document.documentElement.dataset.theme==="light"?"dark":"light");
 applyTheme(localStorage.getItem("btcetf-theme")||"dark");
