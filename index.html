@@ -82,8 +82,9 @@
     .col-left .ussession{order:1}
     .col-left .fng{order:2}
     .col-left .month{order:3}
-    .col-right>*{order:4;margin-bottom:24px}
-    .col-left .snap{order:5;margin-bottom:0}   /* Prehľad úplne dole */
+    .col-left .liqpos{order:4;margin-bottom:24px}
+    .col-right>*{order:5;margin-bottom:24px}
+    .col-left .snap{order:6;margin-bottom:0}   /* Prehľad úplne dole */
   }
   /* prehľadová tabuľka */
   .snap{max-width:none}
@@ -120,6 +121,23 @@
   .us-sub{color:var(--muted);font-size:12px;font-weight:500}
   .us-btc{font-size:13px;color:var(--muted)}
   .us-btc b{font-weight:700}
+  /* Likvidácie & páka */
+  .ls-wrap{margin:12px 0 4px}
+  .ls-bar{display:flex;height:10px;border-radius:6px;overflow:hidden;background:var(--line)}
+  .ls-bar i{display:block;height:100%;transition:width .3s}
+  .ls-long{background:var(--green)} .ls-short{background:var(--red)}
+  .ls-legend{display:flex;justify-content:space-between;font-size:12px;margin-top:6px;font-weight:600}
+  .cglinks{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+  .cglink{flex:1;text-align:center;background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+    padding:8px 10px;font-size:12px;color:var(--text);text-decoration:none;transition:.15s;white-space:nowrap}
+  .cglink:hover{border-color:var(--brand);color:var(--brand)}
+  /* Live likvidácie feed */
+  .liqtotals{display:flex;gap:18px;font-size:13px;margin:0 0 10px;flex-wrap:wrap}
+  .liqfeed{max-height:260px;overflow-y:auto}
+  .liqrow{display:grid;grid-template-columns:64px 52px 1fr 76px;gap:8px;padding:6px 4px;
+    border-bottom:1px solid var(--line);align-items:center;font-size:12.5px;white-space:nowrap}
+  .liqrow.big{background:rgba(255,200,0,.08);font-weight:700}
+  .liqt{color:var(--muted)} .liqp{text-align:right;color:var(--muted)}
   footer{color:var(--muted);font-size:12px;text-align:center;margin-top:30px}
   a{color:var(--accent)}
   #content{transition:opacity .2s} #content.loading{opacity:.4}
@@ -170,6 +188,18 @@
       <p class="hint">Súčet prítokov, odlevov a čistá bilancia za aktuálny mesiac.</p>
       <table class="snaptable"><tbody id="monthBody"></tbody></table>
     </div>
+    <div class="panel liqpos">
+      <h2>Likvidácie &amp; páka <span class="snapdate">Binance BTC perp</span></h2>
+      <table class="snaptable"><tbody id="oiBody"></tbody></table>
+      <div class="ls-wrap">
+        <div class="ls-bar"><i class="ls-long" id="lsLong"></i><i class="ls-short" id="lsShort"></i></div>
+        <div class="ls-legend"><span class="pos" id="lsLongTxt">Long –</span><span class="neg" id="lsShortTxt">Short –</span></div>
+      </div>
+      <div class="cglinks">
+        <a class="cglink" href="https://www.coinglass.com/pro/futures/LiquidationHeatMap?coin=BTC" target="_blank" rel="noopener">CoinGlass Heatmap ↗</a>
+        <a class="cglink" href="https://www.coinglass.com/pro/futures/LiquidationMap" target="_blank" rel="noopener">Liquidation Map ↗</a>
+      </div>
+    </div>
     <div class="panel snap">
       <h2>Prehľad <span id="snapDate" class="snapdate"></span></h2>
       <table class="snaptable"><tbody id="snapBody"></tbody></table>
@@ -207,6 +237,17 @@
       <div class="toolbar" id="rsiRange"></div>
       <div id="rsiDiv"></div>
       <canvas id="rsiChart"></canvas>
+    </div>
+
+    <div class="panel">
+      <h2>Live likvidácie (BTC) <span class="snapdate" id="liqStatus">pripájam…</span></h2>
+      <p class="hint">Skutočné likvidácie z Binance v reálnom čase. Červená = likvidovaný <b>long</b> (nútený predaj),
+        zelená = likvidovaný <b>short</b> (nútený nákup). Beží iba kým je stránka otvorená.</p>
+      <div class="liqtotals">
+        <span>Σ Long likv.: <b id="liqSumLong" class="neg">$0</b></span>
+        <span>Σ Short likv.: <b id="liqSumShort" class="pos">$0</b></span>
+      </div>
+      <div class="liqfeed" id="liqFeed"></div>
     </div>
     </div>
     </div>
@@ -274,6 +315,18 @@ async function fetchBTCHourly(){
   const j=await r.json();
   return (j.prices||[]).map(([t,c])=>({t,c}));
 }
+// Open Interest + Long/Short (Binance, free, CORS *)
+async function fetchOI(){
+  const r=await fetch("https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT");
+  if(!r.ok) throw new Error("OI "+r.status);
+  return parseFloat((await r.json()).openInterest);   // v BTC
+}
+async function fetchLongShort(){
+  const r=await fetch("https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=1h&limit=1");
+  if(!r.ok) throw new Error("LSR "+r.status);
+  const a=(await r.json())[0];
+  return a? {long:parseFloat(a.longAccount), short:parseFloat(a.shortAccount), ratio:parseFloat(a.longShortRatio)} : null;
+}
 // intradenná BTC (posledných 24h, ~5-min) pre US-séansu
 async function fetchBTC1d(){
   const r=await fetch("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1");
@@ -290,11 +343,13 @@ async function load(){
   const content=document.getElementById("content");
   btn.disabled=true; st.className="status"; st.textContent="Sťahujem…"; content.classList.add("loading");
   try{
-    const [hist, metrics, fng, btc, btc1d] = await Promise.all([
+    const [hist, metrics, fng, btc, btc1d, oi, ls] = await Promise.all([
       api("historicalInflowChart"), api("currentEtfDataMetrics"),
       fetchFNG().catch(()=>null),  // F&G nesmie zhodiť hlavný dashboard
       fetchBTC().catch(()=>null),  // cena BTC tiež nie
-      fetchBTC1d().catch(()=>null) // intradenná BTC pre US-séansu
+      fetchBTC1d().catch(()=>null),// intradenná BTC pre US-séansu
+      fetchOI().catch(()=>null),   // open interest
+      fetchLongShort().catch(()=>null) // long/short ratio
     ]);
 
     const series = hist.map(d=>({
@@ -325,7 +380,7 @@ async function load(){
       },
       series, funds, fng,
       btc: btc?btc.map:null, btcDaily: btc?btc.series:null, btcHourly:null,
-      btc1d
+      btc1d, oi, ls
     };
 
     renderAll();
@@ -379,6 +434,7 @@ function renderAll(){
   // Fear & Greed
   renderFNG();
   renderMonth();
+  renderLiq();
   renderUS();
 
   // grafy
@@ -429,6 +485,71 @@ function renderMonth(){
   body.innerHTML=rows.map(r=>
     `<tr class="${r[3]?'big':''}"><td>${r[0]}</td><td class="${r[2]}">${r[1]}</td></tr>`).join("");
 }
+
+// ---------- Open Interest + Long/Short ----------
+function renderLiq(){
+  const oiBody=document.getElementById("oiBody"); if(!oiBody) return;
+  const oiBtc=DATA.oi, ls=DATA.ls;
+  const px=(DATA.btc1d&&DATA.btc1d.length)? DATA.btc1d[DATA.btc1d.length-1][1]
+          : (DATA.btcDaily&&DATA.btcDaily.length? DATA.btcDaily[DATA.btcDaily.length-1].c : null);
+  const oiUsd=(oiBtc!=null&&px)? oiBtc*px : null;
+  oiBody.innerHTML=
+    `<tr class="big"><td>Open Interest</td><td>${oiUsd!=null?fmtUSD(oiUsd):"–"}</td></tr>`+
+    `<tr><td>OI v BTC</td><td>${oiBtc!=null? Math.round(oiBtc).toLocaleString("en-US")+" ₿":"–"}</td></tr>`+
+    `<tr class="sec"><td colspan="2">Long / Short účty (1h)</td></tr>`;
+  if(ls){
+    const lp=ls.long*100, sp=ls.short*100;
+    document.getElementById("lsLong").style.width=lp+"%";
+    document.getElementById("lsShort").style.width=sp+"%";
+    document.getElementById("lsLongTxt").textContent="Long "+lp.toFixed(0)+"%";
+    document.getElementById("lsShortTxt").textContent="Short "+sp.toFixed(0)+"%";
+  }
+}
+
+// ---------- Live likvidácie (Binance WebSocket) ----------
+let liqWs=null, liqClosing=false, liqSumLong=0, liqSumShort=0, liqRows=[];
+function startLiqFeed(){
+  if(document.hidden) return;
+  try{ if(liqWs){ liqClosing=true; liqWs.close(); } }catch(e){}
+  liqClosing=false;
+  const st=document.getElementById("liqStatus");
+  let ws; try{ ws=new WebSocket("wss://fstream.binance.com/ws/!forceOrder@arr"); }
+  catch(e){ if(st){st.textContent="WS nedostupné";} return; }
+  liqWs=ws;
+  ws.onopen=()=>{ if(st){st.textContent="● naživo"; st.style.color="#16c784";} };
+  ws.onerror=()=>{ if(st){st.textContent="chyba spojenia"; st.style.color="#ea3943";} };
+  ws.onclose=()=>{ if(st && !liqClosing){st.textContent="odpojené…"; st.style.color="var(--muted)";}
+    if(!liqClosing && !document.hidden) setTimeout(startLiqFeed,3000); };
+  ws.onmessage=(ev)=>{
+    let d; try{ d=JSON.parse(ev.data); }catch(e){ return; }
+    const o=d.o; if(!o || o.s!=="BTCUSDT") return;
+    const qty=parseFloat(o.q), price=parseFloat(o.ap||o.p), usd=qty*price;
+    if(!usd || usd<1000) return;                 // odfiltruj drobné
+    const longLiq = o.S==="SELL";                // SELL order = likvidovaný long
+    if(longLiq) liqSumLong+=usd; else liqSumShort+=usd;
+    liqRows.unshift({t:d.E||Date.now(), longLiq, usd, price});
+    if(liqRows.length>40) liqRows.pop();
+    renderLiqFeed();
+  };
+}
+function renderLiqFeed(){
+  const feed=document.getElementById("liqFeed"); if(!feed) return;
+  const sl=document.getElementById("liqSumLong"), ss=document.getElementById("liqSumShort");
+  if(sl) sl.textContent=fmtUSD(liqSumLong);
+  if(ss) ss.textContent=fmtUSD(liqSumShort);
+  feed.innerHTML = liqRows.length ? liqRows.map(r=>{
+    const tm=new Date(r.t).toLocaleTimeString("sk-SK");
+    return `<div class="liqrow${r.usd>=100000?' big':''}">`+
+      `<span class="liqt">${tm}</span>`+
+      `<span class="${r.longLiq?'neg':'pos'}">${r.longLiq?'Long':'Short'}</span>`+
+      `<span>${fmtUSD(r.usd)}</span>`+
+      `<span class="liqp">$${Math.round(r.price).toLocaleString('en-US')}</span></div>`;
+  }).join("") : '<div class="liqrow"><span class="liqt">čakám na likvidácie…</span><span></span><span></span><span></span></div>';
+}
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden){ liqClosing=true; try{ if(liqWs) liqWs.close(); }catch(e){} }
+  else { startLiqFeed(); }
+});
 
 // ---------- US burza: status + odpočet + BTC od otvorenia ----------
 function fmtDur(ms){
@@ -749,6 +870,8 @@ applyTheme(localStorage.getItem("btcetf-theme")||"dark");
 setInterval(()=>{ if(DATA) renderUS(); }, 60000);
 
 load();
+renderLiqFeed();   // prázdny stav kým prídu prvé likvidácie
+startLiqFeed();    // live WS feed (beží iba kým je stránka otvorená)
 </script>
 </body>
 </html>
