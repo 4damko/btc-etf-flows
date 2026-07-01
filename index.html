@@ -134,9 +134,13 @@
   /* Live likvidácie feed */
   .liqtotals{display:flex;gap:18px;font-size:13px;margin:0 0 10px;flex-wrap:wrap}
   .liqfeed{max-height:260px;overflow-y:auto}
-  .liqrow{display:grid;grid-template-columns:64px 52px 1fr 76px;gap:8px;padding:6px 4px;
+  .liqrow{display:grid;grid-template-columns:58px 54px 46px 1fr 74px;gap:8px;padding:6px 4px;
     border-bottom:1px solid var(--line);align-items:center;font-size:12.5px;white-space:nowrap}
   .liqrow.big{background:rgba(255,200,0,.08);font-weight:700}
+  .liqrow.btc{background:rgba(0,134,255,.07)}
+  .liqrow.btc.big{background:rgba(0,134,255,.14)}
+  .liqsym{font-weight:700;color:var(--muted)}
+  .liqrow.btc .liqsym{color:var(--brand)}
   .liqt{color:var(--muted)} .liqp{text-align:right;color:var(--muted)}
   footer{color:var(--muted);font-size:12px;text-align:center;margin-top:30px}
   a{color:var(--accent)}
@@ -240,9 +244,9 @@
     </div>
 
     <div class="panel">
-      <h2>Live likvidácie (BTC) <span class="snapdate" id="liqStatus">pripájam…</span></h2>
-      <p class="hint">Skutočné likvidácie z Binance v reálnom čase. Červená = likvidovaný <b>long</b> (nútený predaj),
-        zelená = likvidovaný <b>short</b> (nútený nákup). Beží iba kým je stránka otvorená.</p>
+      <h2>Live likvidácie <span class="snapdate" id="liqStatus">pripájam…</span></h2>
+      <p class="hint">Skutočné likvidácie z Binance (celý trh, ≥ $5k) v reálnom čase — <b style="color:var(--brand)">BTC zvýraznený</b>.
+        Červená = likvidovaný <b>long</b> (nútený predaj), zelená = <b>short</b> (nútený nákup). Beží iba kým je tab otvorený a viditeľný.</p>
       <div class="liqtotals">
         <span>Σ Long likv.: <b id="liqSumLong" class="neg">$0</b></span>
         <span>Σ Short likv.: <b id="liqSumShort" class="pos">$0</b></span>
@@ -513,7 +517,7 @@ function startLiqFeed(){
   try{ if(liqWs){ liqClosing=true; liqWs.close(); } }catch(e){}
   liqClosing=false;
   const st=document.getElementById("liqStatus");
-  let ws; try{ ws=new WebSocket("wss://fstream.binance.com/ws/!forceOrder@arr"); }
+  let ws; try{ ws=new WebSocket("wss://fstream.binance.com/stream?streams=!forceOrder@arr"); }
   catch(e){ if(st){st.textContent="WS nedostupné";} return; }
   liqWs=ws;
   ws.onopen=()=>{ if(st){st.textContent="● naživo"; st.style.color="#16c784";} };
@@ -522,13 +526,15 @@ function startLiqFeed(){
     if(!liqClosing && !document.hidden) setTimeout(startLiqFeed,3000); };
   ws.onmessage=(ev)=>{
     let d; try{ d=JSON.parse(ev.data); }catch(e){ return; }
-    const o=d.o; if(!o || o.s!=="BTCUSDT") return;
+    const m=d.data||d;                            // combined {stream,data} aj raw formát
+    const o=m.o; if(!o || !o.s) return;
+    const sym=o.s.replace(/(USDT|USDC|BUSD|USD)$/,"");   // BTCUSDT -> BTC
     const qty=parseFloat(o.q), price=parseFloat(o.ap||o.p), usd=qty*price;
-    if(!usd || usd<1000) return;                 // odfiltruj drobné
-    const longLiq = o.S==="SELL";                // SELL order = likvidovaný long
+    if(!usd || usd<5000) return;                  // len zmysluplné likvidácie (≥ $5k)
+    const longLiq = o.S==="SELL";                 // SELL order = likvidovaný long
     if(longLiq) liqSumLong+=usd; else liqSumShort+=usd;
-    liqRows.unshift({t:d.E||Date.now(), longLiq, usd, price});
-    if(liqRows.length>40) liqRows.pop();
+    liqRows.unshift({t:m.E||Date.now(), sym, isBtc:o.s==="BTCUSDT", longLiq, usd, price});
+    if(liqRows.length>50) liqRows.pop();
     renderLiqFeed();
   };
 }
@@ -539,12 +545,13 @@ function renderLiqFeed(){
   if(ss) ss.textContent=fmtUSD(liqSumShort);
   feed.innerHTML = liqRows.length ? liqRows.map(r=>{
     const tm=new Date(r.t).toLocaleTimeString("sk-SK");
-    return `<div class="liqrow${r.usd>=100000?' big':''}">`+
+    return `<div class="liqrow${r.usd>=250000?' big':''}${r.isBtc?' btc':''}">`+
       `<span class="liqt">${tm}</span>`+
+      `<span class="liqsym">${r.sym}</span>`+
       `<span class="${r.longLiq?'neg':'pos'}">${r.longLiq?'Long':'Short'}</span>`+
       `<span>${fmtUSD(r.usd)}</span>`+
       `<span class="liqp">$${Math.round(r.price).toLocaleString('en-US')}</span></div>`;
-  }).join("") : '<div class="liqrow"><span class="liqt">čakám na likvidácie…</span><span></span><span></span><span></span></div>';
+  }).join("") : '<div class="liqrow"><span class="liqt">čakám na likvidácie…</span><span></span><span></span><span></span><span></span></div>';
 }
 document.addEventListener("visibilitychange",()=>{
   if(document.hidden){ liqClosing=true; try{ if(liqWs) liqWs.close(); }catch(e){} }
