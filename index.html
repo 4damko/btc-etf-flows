@@ -285,9 +285,16 @@ async function fetchFlows(){
   const MON = {Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12};
   const dateRe = /^(\d{1,2}) ([A-Z][a-z]{2}) (\d{4})$/;
   const rows = []; let cur = null;
+  const start = (m)=>{ cur = {date:`${m[3]}-${String(MON[m[2]]).padStart(2,"0")}-${m[1].padStart(2,"0")}`, vals:[]}; rows.push(cur); };
   for(const l of lines){
+    if(l[0]==="|"){   // jina niekedy vráti markdown tabuľku: | 01 Oct 2026 | 195.6 | ... | Total |
+      const cells = l.split("|").slice(1,-1).map(c=>c.trim());
+      const m = (cells[0]||"").match(dateRe);
+      if(m){ start(m); cur.vals = cells.slice(1); }
+      continue;
+    }
     const m = l.match(dateRe);
-    if(m){ cur = {date:`${m[3]}-${String(MON[m[2]]).padStart(2,"0")}-${m[1].padStart(2,"0")}`, vals:[]}; rows.push(cur); }
+    if(m) start(m);
     else if(/^(Total|Average|Maximum|Minimum)/.test(l)) cur = null;
     else if(cur) cur.vals.push(l);
   }
