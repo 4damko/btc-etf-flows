@@ -10,7 +10,7 @@ v prehliadači, Cmd+R).
 
 - **Nič nebeží na pozadí** — žiadny server, žiadny démon, nulová záťaž CPU/energie,
   kým stránku neotvoríš.
-- Dáta sa ťahajú naživo priamo z prehliadača (SoSoValue OpenAPI, bez kľúča).
+- Dáta sa ťahajú naživo priamo z prehliadača (Farside cez r.jina.ai proxy, bez kľúča; SoSoValue API je od 10/2026 za Cloudflare).
 - Potrebuje len internet (kvôli dátam + Chart.js z CDN).
 
 ## Čo ukazuje

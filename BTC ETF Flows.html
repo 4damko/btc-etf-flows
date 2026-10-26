@@ -258,14 +258,14 @@
   </div>
 
   <footer>
-    Zdroj: <a href="https://sosovalue.com/assets/etf/us-btc-spot" target="_blank">SoSoValue</a> OpenAPI ·
+    Zdroj: <a href="https://farside.co.uk/bitcoin-etf-flow-all-data/" target="_blank">Farside Investors</a> ·
     Dáta sa sťahujú naživo pri každom načítaní stránky (refresh = aktuálne čísla).
   </footer>
 </div>
 
 <script>
-const API = "https://api.sosovalue.xyz/openapi/v2/etf";
-const ASSET = "us-btc-spot";   // pre Ethereum ETF zmeň na "us-eth-spot"
+// Farside cez r.jina.ai (server-side fetch obchádza Cloudflare, posiela CORS hlavičku)
+const FARSIDE = "https://r.jina.ai/https://farside.co.uk/bitcoin-etf-flow-all-data/";   // ETH: ethereum-etf-flow-all-data
 
 // ---------- pomocné formátovanie ----------
 const fmtUSD = (v,dec=1)=>{
@@ -275,20 +275,33 @@ const fmtUSD = (v,dec=1)=>{
   return (v<0?"-$":"$")+Math.abs(s).toLocaleString("en-US",{maximumFractionDigits:dec})+u;
 };
 const cls = v => (v==null||isNaN(v))?"":(v>=0?"pos":"neg");
-const num = m => { const v = m && typeof m==="object" ? m.value : m; const f=parseFloat(v); return isNaN(f)?null:f; };
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
-// ---------- načítanie dát z API ----------
-async function api(endpoint){
-  const r = await fetch(`${API}/${endpoint}`, {
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({type:ASSET})
+// ---------- denné toky z Farside (US$m, posledný stĺpec riadku = Total) ----------
+async function fetchFlows(){
+  const r = await fetch(FARSIDE);
+  if(!r.ok) throw new Error("Farside HTTP "+r.status);
+  const lines = (await r.text()).split("\n").map(l=>l.trim()).filter(Boolean);
+  const MON = {Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12};
+  const dateRe = /^(\d{1,2}) ([A-Z][a-z]{2}) (\d{4})$/;
+  const rows = []; let cur = null;
+  for(const l of lines){
+    const m = l.match(dateRe);
+    if(m){ cur = {date:`${m[3]}-${String(MON[m[2]]).padStart(2,"0")}-${m[1].padStart(2,"0")}`, vals:[]}; rows.push(cur); }
+    else if(/^(Total|Average|Maximum|Minimum)/.test(l)) cur = null;
+    else if(cur) cur.vals.push(l);
+  }
+  const series = []; let cum = 0;
+  rows.sort((a,b)=> a.date<b.date?-1:1).forEach(r=>{
+    if(r.vals.length<2 || r.vals.slice(0,-1).every(v=>v==="-")) return;   // deň ešte nezverejnený
+    const t = r.vals[r.vals.length-1];
+    const v = parseFloat(t.replace(/,/g,"").replace(/^\((.*)\)$/,"-$1"));
+    if(isNaN(v)) return;
+    cum += v*1e6;
+    series.push({date:r.date, totalNetInflow:v*1e6, cumNetInflow:cum});
   });
-  if(!r.ok) throw new Error(`${endpoint}: HTTP ${r.status}`);
-  const j = await r.json();
-  if(j.code!==0) throw new Error(`${endpoint}: ${j.msg||"API chyba"}`);
-  return j.data;
+  if(!series.length) throw new Error("Farside: žiadne dáta (zmenil sa formát?)");
+  return series;
 }
 
 // Fear & Greed Index (alternative.me, CORS *)
@@ -347,8 +360,8 @@ async function load(){
   const content=document.getElementById("content");
   btn.disabled=true; st.className="status"; st.textContent="Sťahujem…"; content.classList.add("loading");
   try{
-    const [hist, metrics, fng, btc, btc1d, oi, ls] = await Promise.all([
-      api("historicalInflowChart"), api("currentEtfDataMetrics"),
+    const [series, fng, btc, btc1d, oi, ls] = await Promise.all([
+      fetchFlows(),
       fetchFNG().catch(()=>null),  // F&G nesmie zhodiť hlavný dashboard
       fetchBTC().catch(()=>null),  // cena BTC tiež nie
       fetchBTC1d().catch(()=>null),// intradenná BTC pre US-séansu
@@ -356,33 +369,10 @@ async function load(){
       fetchLongShort().catch(()=>null) // long/short ratio
     ]);
 
-    const series = hist.map(d=>({
-      date:d.date,
-      totalNetInflow:num(d.totalNetInflow),
-      totalNetAssets:num(d.totalNetAssets),
-      cumNetInflow:num(d.cumNetInflow),
-      totalValueTraded:num(d.totalValueTraded),
-    })).sort((a,b)=> a.date<b.date?-1:1);
-
-    const funds = (metrics.list||[]).map(f=>({
-      ticker:(f.ticker||"").trim(),
-      institute:(f.institute||"").trim(),
-      fee:num(f.fee),
-      netAssets:num(f.netAssets),
-      dailyNetInflow:num(f.dailyNetInflow),
-      cumNetInflow:num(f.cumNetInflow),
-      dailyValueTraded:num(f.dailyValueTraded),
-    })).sort((a,b)=>(b.netAssets||0)-(a.netAssets||0));
-
+    const lastS = series[series.length-1];
     DATA = {
-      summary:{
-        dailyNetInflow:num(metrics.dailyNetInflow),
-        cumNetInflow:num(metrics.cumNetInflow),
-        totalNetAssets:num(metrics.totalNetAssets),
-        totalTokenHoldings:num(metrics.totalTokenHoldings),
-        dailyTotalValueTraded:num(metrics.dailyTotalValueTraded),
-      },
-      series, funds, fng,
+      summary:{ dailyNetInflow:lastS.totalNetInflow, cumNetInflow:lastS.cumNetInflow },
+      series, funds:[], fng,
       btc: btc?btc.map:null, btcDaily: btc?btc.series:null, btcHourly:null,
       btc1d, oi, ls
     };
@@ -409,9 +399,6 @@ function renderAll(){
   const cards=[
     {lbl:"Denný čistý tok", v:fmtUSD(s.dailyNetInflow), c:cls(s.dailyNetInflow), d: cLast&&cPrev?dir(cLast.totalNetInflow,cPrev.totalNetInflow):0},
     {lbl:"Kumulatívny tok", v:fmtUSD(s.cumNetInflow), c:"pos", d: cLast&&cPrev?dir(cLast.cumNetInflow,cPrev.cumNetInflow):0},
-    {lbl:"Net assets (AUM)", v:fmtUSD(s.totalNetAssets), c:"", d: cLast&&cPrev?dir(cLast.totalNetAssets,cPrev.totalNetAssets):0},
-    {lbl:"Denný obrat", v:fmtUSD(s.dailyTotalValueTraded), c:"", d: cLast&&cPrev?dir(cLast.totalValueTraded,cPrev.totalValueTraded):0},
-    {lbl:"BTC v držbe", v:(s.totalTokenHoldings!=null? Math.round(s.totalTokenHoldings).toLocaleString("en-US")+" ₿":"–"), c:"", d:(s.dailyNetInflow||0)>0?1:((s.dailyNetInflow||0)<0?-1:0)},
   ];
   document.getElementById("cards").innerHTML = cards.map(c=>{
     const a = c.d>0? '<span class="cardarrow up">↑</span>' : c.d<0? '<span class="cardarrow down">↓</span>' : '';
@@ -424,8 +411,6 @@ function renderAll(){
   const top=[
     ["Denný tok", fmtUSD(s.dailyNetInflow), cls(s.dailyNetInflow)],
     ["Kumulatív", fmtUSD(s.cumNetInflow), "pos"],
-    ["AUM", fmtUSD(s.totalNetAssets), ""],
-    ["BTC v držbe", (s.totalTokenHoldings!=null? Math.round(s.totalTokenHoldings).toLocaleString("en-US")+" ₿":"–"), ""],
   ];
   let h = top.map(r=>`<tr class="big"><td>${r[0]}</td><td class="${r[2]}">${r[1]}</td></tr>`).join("");
   const dayRows = n => series.slice(-n).reverse().map(d=>
